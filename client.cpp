@@ -25,9 +25,15 @@ using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
 using namespace helloworld;
 
-void worker(const int tid, const string &addr, const int port, int qps, int duration, list<int64_t> &reqs_latency, int &n_reqs_sent) {
+void worker(const int tid, const string &addr, const int port, int qps, int duration, bool nonblocking, list<int64_t> &reqs_latency, int &n_reqs_sent) {
   stdcxx::shared_ptr<TTransport> socket(new TSocket(addr, port));
-  stdcxx::shared_ptr<TTransport> transport(new TFramedTransport(socket));
+  stdcxx::shared_ptr<TTransport> transport;
+
+  if (nonblocking)
+    transport = stdcxx::shared_ptr<TTransport>(new TFramedTransport(socket)) ;
+  else
+    transport = stdcxx::shared_ptr<TTransport>(new TBufferedTransport(socket));
+
   stdcxx::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
   HelloworldServiceClient client(protocol);
 
@@ -125,7 +131,7 @@ int main(int argc, char *argv[]) {
   auto *reqs_latency = new list<int64_t> [n_threads];
 
   for (auto &i : t_ptr) {
-    i = std::make_shared<thread>(worker, tid, addr, port, qps / n_threads, duration, ref(reqs_latency[tid]), ref(n_reqs_sent[tid]));
+    i = std::make_shared<thread>(worker, tid, addr, port, qps / n_threads, duration, nonblocking, ref(reqs_latency[tid]), ref(n_reqs_sent[tid]));
     tid++;
     this_thread::sleep_for(chrono::microseconds(interval));
   }
