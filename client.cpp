@@ -25,7 +25,17 @@ using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
 using namespace helloworld;
 
-void worker(const int tid, const string &addr, const int port, int qps, int duration, bool nonblocking, list<int64_t> &reqs_latency, int &n_reqs_sent) {
+void worker
+(   
+    const int tid, 
+    const string &addr, 
+    const int port, 
+    int qps, 
+    int duration, 
+    bool nonblocking, 
+    list<int64_t> &reqs_latency, 
+    int &n_reqs_sent
+) {
   stdcxx::shared_ptr<TTransport> socket(new TSocket(addr, port));
   stdcxx::shared_ptr<TTransport> transport;
 
@@ -48,17 +58,20 @@ void worker(const int tid, const string &addr, const int port, int qps, int dura
     string res;
     transport->open();
     while (chrono::high_resolution_clock::now() < thread_start_time + chrono::microseconds(duration_us)){
-
+      while (chrono::high_resolution_clock::now() < next_send_time) {
+        int64_t sleep_time_us = (next_send_time - chrono::high_resolution_clock::now()).count() / 1000;
+        sleep_time_us = max(sleep_time_us, (long)0);
+        if (sleep_time_us)
+          this_thread::sleep_for(chrono::microseconds(sleep_time_us));
+      }
       auto start_time = chrono::high_resolution_clock::now();
       client.getHelloworld(res);
       auto end_time = chrono::high_resolution_clock::now();
       auto req_latency = (end_time - start_time).count() / 1000;
-//      cout<<tid<<" "<<res<<endl;
       reqs_latency.push_back(req_latency);
       n_reqs_sent++;
-      auto sleep_time = max((req_inteval_us - req_latency), (long)0);
-      if (sleep_time)
-        this_thread::sleep_for(chrono::microseconds(sleep_time));
+      next_send_time = next_send_time + chrono::microseconds(req_inteval_us);
+      
     }
 
     transport->close();
