@@ -1,0 +1,1043 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="434" onload="init(evt)" viewBox="0 0 1200 434" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, searchbtn, matchedtxt, svg;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(node) {		// show
+		info = g_to_text(node);
+		details.nodeValue = "Function: " + info;
+	}
+	function c() {			// clear
+		details.nodeValue = ' ';
+	}
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	})
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		if (func != null)
+			func = func.replace(/ .*/, "");
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) {
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.style["opacity"] = "0.0";
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			if (e.attributes["class"].value != "func_g")
+				continue;
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (rect == null) {
+				// the rect might be wrapped in an anchor
+				// if nameattr href is being used
+				if (rect = find_child(e, "a")) {
+				    rect = find_child(r, "rect");
+				}
+			}
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes["width"].value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes["x"].value);
+				orig_save(rect, "fill");
+				rect.attributes["fill"].value =
+				    "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.style["opacity"] = "1.0";
+		searchbtn.firstChild.nodeValue = "Reset Search"
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+				return a - b;
+			if (a < b || a > b)
+				return a - b;
+			return matches[b] - matches[a];
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.style["opacity"] = "1.0";
+		pct = 100 * count / maxwidth;
+		if (pct == 100)
+			pct = "100"
+		else
+			pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+	function searchover(e) {
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="434.0" fill="url(#background)"  />
+<text text-anchor="middle" x="600.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >Flame Graph</text>
+<text text-anchor="" x="10.00" y="417" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="1090.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<text text-anchor="" x="1090.00" y="417" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="matched" > </text>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>0x206 (12 samples, 1.13%)</title><rect x="10.0" y="369" width="13.4" height="15.0" fill="rgb(216,60,36)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_start (4 samples, 0.38%)</title><rect x="24.5" y="369" width="4.5" height="15.0" fill="rgb(236,209,49)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport17TVirtualTransportINS1_7TSocketENS1_18TTransportDefaultsEE10write_virtEPKhj (724 samples, 68.43%)</title><rect x="60.2" y="209" width="807.5" height="15.0" fill="rgb(215,133,30)" rx="2" ry="2" />
+<text text-anchor="" x="63.19" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport17TVirtualTransportINS1_7TSocketENS1_18TTransportDefaultsEE10write_virtEPKhj</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsaSEPKc+0x0/0x30 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="43.5" y="225" width="1.1" height="15.0" fill="rgb(218,176,9)" rx="2" ry="2" />
+<text text-anchor="" x="46.46" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE16readMessageBeginERSsRNS1_12TMessageTypeERi (237 samples, 22.40%)</title><rect x="896.7" y="241" width="264.3" height="15.0" fill="rgb(211,5,25)" rx="2" ry="2" />
+<text text-anchor="" x="899.67" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift8protocol16TBinary..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_Z18const_cast_sockoptIhEPKvPKT_ (1 samples, 0.09%)</title><rect x="64.7" y="161" width="1.1" height="15.0" fill="rgb(210,67,36)" rx="2" ry="2" />
+<text text-anchor="" x="67.65" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport17TVirtualTransportINS1_18TBufferedTransportENS1_11TBufferBaseEE10write_virtEPKhj (1 samples, 0.09%)</title><rect x="54.6" y="161" width="1.1" height="15.0" fill="rgb(231,189,10)" rx="2" ry="2" />
+<text text-anchor="" x="57.61" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE8writeI32Ei (1 samples, 0.09%)</title><rect x="871.0" y="177" width="1.1" height="15.0" fill="rgb(246,157,17)" rx="2" ry="2" />
+<text text-anchor="" x="874.02" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs9_M_mutateEmmm+0x13e/0x210 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="40.1" y="161" width="1.1" height="15.0" fill="rgb(225,206,21)" rx="2" ry="2" />
+<text text-anchor="" x="43.11" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN9__gnu_cxxL21__atomic_add_dispatchEPii (1 samples, 0.09%)</title><rect x="1182.2" y="225" width="1.1" height="15.0" fill="rgb(237,83,31)" rx="2" ry="2" />
+<text text-anchor="" x="1185.19" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__accept_nocancel (1 samples, 0.09%)</title><rect x="27.8" y="241" width="1.2" height="15.0" fill="rgb(218,163,48)" rx="2" ry="2" />
+<text text-anchor="" x="30.84" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol15writeFieldBeginEPKcNS1_5TTypeEs (4 samples, 0.38%)</title><rect x="874.4" y="225" width="4.4" height="15.0" fill="rgb(246,3,46)" rx="2" ry="2" />
+<text text-anchor="" x="877.37" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport17TVirtualTransportINS1_7TSocketENS1_18TTransportDefaultsEE9read_virtEPhj (215 samples, 20.32%)</title><rect x="915.6" y="81" width="239.8" height="15.0" fill="rgb(217,90,18)" rx="2" ry="2" />
+<text text-anchor="" x="918.63" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport17TV..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__pthread_disable_asynccancel (1 samples, 0.09%)</title><rect x="866.6" y="145" width="1.1" height="15.0" fill="rgb(231,161,21)" rx="2" ry="2" />
+<text text-anchor="" x="869.56" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt10shared_ptrIN6apache6thrift9transport10TTransportEEC2ERKS4_ (4 samples, 0.38%)</title><rect x="45.7" y="225" width="4.5" height="15.0" fill="rgb(217,28,36)" rx="2" ry="2" />
+<text text-anchor="" x="48.69" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsD1Ev+0x2c/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (2 samples, 0.19%)</title><rect x="1163.2" y="273" width="2.3" height="15.0" fill="rgb(237,197,24)" rx="2" ry="2" />
+<text text-anchor="" x="1166.23" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__pthread_disable_asynccancel (1 samples, 0.09%)</title><rect x="1154.3" y="33" width="1.1" height="15.0" fill="rgb(229,81,1)" rx="2" ry="2" />
+<text text-anchor="" x="1157.31" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt3mapISsMN10helloworld26HelloworldServiceProcessorEFviPN6apache6thrift8protocol9TProtocolES6_PvESt4lessISsESaISt4pairIKSsS9_EEE4findERSD_ (3 samples, 0.28%)</title><rect x="891.1" y="257" width="3.3" height="15.0" fill="rgb(251,186,21)" rx="2" ry="2" />
+<text text-anchor="" x="894.10" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK5boost12scoped_arrayIhE3getEv (1 samples, 0.09%)</title><rect x="867.7" y="225" width="1.1" height="15.0" fill="rgb(215,196,38)" rx="2" ry="2" />
+<text text-anchor="" x="870.67" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE8writeI32Ei (1 samples, 0.09%)</title><rect x="54.6" y="193" width="1.1" height="15.0" fill="rgb(210,181,2)" rx="2" ry="2" />
+<text text-anchor="" x="57.61" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift6server15TThreadedServer5serveEv (4 samples, 0.38%)</title><rect x="24.5" y="305" width="4.5" height="15.0" fill="rgb(253,120,41)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_Z11startServerRN6apache6thrift6server7TServerE (4 samples, 0.38%)</title><rect x="24.5" y="321" width="4.5" height="15.0" fill="rgb(232,119,37)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN9__gnu_cxxL18__exchange_and_addEPVii (3 samples, 0.28%)</title><rect x="886.6" y="161" width="3.4" height="15.0" fill="rgb(249,88,3)" rx="2" ry="2" />
+<text text-anchor="" x="889.64" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>sched_get_priority_min (1 samples, 0.09%)</title><rect x="26.7" y="209" width="1.1" height="15.0" fill="rgb(226,87,5)" rx="2" ry="2" />
+<text text-anchor="" x="29.73" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift6server16TServerFramework20newlyConnectedClientERKSt10shared_ptrINS1_16TConnectedClientEE (3 samples, 0.28%)</title><rect x="24.5" y="273" width="3.3" height="15.0" fill="rgb(241,174,18)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN10helloworld36HelloworldService_getHelloworld_args4readEPN6apache6thrift8protocol9TProtocolE (2 samples, 0.19%)</title><rect x="39.0" y="241" width="2.2" height="15.0" fill="rgb(244,57,27)" rx="2" ry="2" />
+<text text-anchor="" x="42.00" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN10helloworld26HelloworldServiceProcessor21process_getHelloworldEiPN6apache6thrift8protocol9TProtocolES5_Pv (764 samples, 72.21%)</title><rect x="37.9" y="257" width="852.1" height="15.0" fill="rgb(227,123,34)" rx="2" ry="2" />
+<text text-anchor="" x="40.88" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN10helloworld26HelloworldServiceProcessor21process_getHelloworldEiPN6apache6thrift8protocol9TProtocolES5_Pv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift11concurrency12SynchronizedD2Ev (1 samples, 0.09%)</title><rect x="24.5" y="225" width="1.1" height="15.0" fill="rgb(211,186,32)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport5writeEPKhj (1 samples, 0.09%)</title><rect x="872.1" y="161" width="1.2" height="15.0" fill="rgb(216,138,6)" rx="2" ry="2" />
+<text text-anchor="" x="875.14" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt12__shared_ptrIN6apache6thrift8protocol9TProtocolELN9__gnu_cxx12_Lock_policyE2EEC2ERKS6_ (5 samples, 0.47%)</title><rect x="1177.7" y="273" width="5.6" height="15.0" fill="rgb(241,160,19)" rx="2" ry="2" />
+<text text-anchor="" x="1180.73" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE15writeFieldBeginEPKcNS1_5TTypeEs (2 samples, 0.19%)</title><rect x="876.6" y="193" width="2.2" height="15.0" fill="rgb(236,17,3)" rx="2" ry="2" />
+<text text-anchor="" x="879.60" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt14__shared_countILN9__gnu_cxx12_Lock_policyE2EED1Ev (3 samples, 0.28%)</title><rect x="1186.7" y="257" width="3.3" height="15.0" fill="rgb(251,179,15)" rx="2" ry="2" />
+<text text-anchor="" x="1189.65" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>start_thread (1,041 samples, 98.39%)</title><rect x="29.0" y="353" width="1161.0" height="15.0" fill="rgb(227,52,50)" rx="2" ry="2" />
+<text text-anchor="" x="31.96" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >start_thread</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNKSt12__shared_ptrIN6apache6thrift8protocol9TProtocolELN9__gnu_cxx12_Lock_policyE2EEptEv (1 samples, 0.09%)</title><rect x="1161.0" y="273" width="1.1" height="15.0" fill="rgb(218,140,7)" rx="2" ry="2" />
+<text text-anchor="" x="1164.00" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNKSt12__shared_ptrIN6apache6thrift6server19TServerEventHandlerELN9__gnu_cxx12_Lock_policyE2EEcvbEv (6 samples, 0.57%)</title><rect x="1169.9" y="289" width="6.7" height="15.0" fill="rgb(206,6,51)" rx="2" ry="2" />
+<text text-anchor="" x="1172.92" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport7TSocket4readEPhj (215 samples, 20.32%)</title><rect x="915.6" y="65" width="239.8" height="15.0" fill="rgb(206,93,35)" rx="2" ry="2" />
+<text text-anchor="" x="918.63" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport7TSo..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK6apache6thrift11concurrency5Mutex4impl6unlockEv (1 samples, 0.09%)</title><rect x="24.5" y="177" width="1.1" height="15.0" fill="rgb(213,128,16)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt14__shared_countILN9__gnu_cxx12_Lock_policyE2EEC2ERKS2_ (3 samples, 0.28%)</title><rect x="1180.0" y="257" width="3.3" height="15.0" fill="rgb(246,106,51)" rx="2" ry="2" />
+<text text-anchor="" x="1182.96" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt10shared_ptrIN6apache6thrift9transport10TTransportEED1Ev (5 samples, 0.47%)</title><rect x="884.4" y="241" width="5.6" height="15.0" fill="rgb(216,162,15)" rx="2" ry="2" />
+<text text-anchor="" x="887.40" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZdlPv+0x0/0x10 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="41.2" y="209" width="1.1" height="15.0" fill="rgb(248,159,14)" rx="2" ry="2" />
+<text text-anchor="" x="44.23" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt16_Sp_counted_baseILN9__gnu_cxx12_Lock_policyE2EE10_M_releaseEv (1 samples, 0.09%)</title><rect x="1188.9" y="241" width="1.1" height="15.0" fill="rgb(237,45,33)" rx="2" ry="2" />
+<text text-anchor="" x="1191.88" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNKSt4lessISsEclERKSsS2_ (1 samples, 0.09%)</title><rect x="891.1" y="209" width="1.1" height="15.0" fill="rgb(208,192,28)" rx="2" ry="2" />
+<text text-anchor="" x="894.10" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsC1Ev+0x0/0x10 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="1162.1" y="273" width="1.1" height="15.0" fill="rgb(231,110,3)" rx="2" ry="2" />
+<text text-anchor="" x="1165.12" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TVirtualProtocolINS1_16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEEENS1_17TProtocolDefaultsEE22writeMessageBegin_virtERKSsNS1_12TMessageTypeEi (3 samples, 0.28%)</title><rect x="52.4" y="225" width="3.3" height="15.0" fill="rgb(205,198,47)" rx="2" ry="2" />
+<text text-anchor="" x="55.38" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift6server16TConnectedClient3runEv (1,041 samples, 98.39%)</title><rect x="29.0" y="305" width="1161.0" height="15.0" fill="rgb(228,151,49)" rx="2" ry="2" />
+<text text-anchor="" x="31.96" y="315.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift6server16TConnectedClient3runEv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_init (1 samples, 0.09%)</title><rect x="1168.8" y="273" width="1.1" height="15.0" fill="rgb(245,164,46)" rx="2" ry="2" />
+<text text-anchor="" x="1171.81" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt8_Rb_treeISsSt4pairIKSsMN10helloworld26HelloworldServiceProcessorEFviPN6apache6thrift8protocol9TProtocolES8_PvEESt10_Select1stISC_ESt4lessISsESaISC_EE4findERS1_ (3 samples, 0.28%)</title><rect x="891.1" y="241" width="3.3" height="15.0" fill="rgb(209,45,31)" rx="2" ry="2" />
+<text text-anchor="" x="894.10" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK6apache6thrift11concurrency7Monitor4Impl11waitForeverEv (1 samples, 0.09%)</title><rect x="25.6" y="177" width="1.1" height="15.0" fill="rgb(248,35,6)" rx="2" ry="2" />
+<text text-anchor="" x="28.61" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsD1Ev+0x3e/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="1166.6" y="273" width="1.1" height="15.0" fill="rgb(224,163,19)" rx="2" ry="2" />
+<text text-anchor="" x="1169.58" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_attr_setschedparam (1 samples, 0.09%)</title><rect x="26.7" y="225" width="1.1" height="15.0" fill="rgb(252,173,42)" rx="2" ry="2" />
+<text text-anchor="" x="29.73" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE14writeFieldStopEv (1 samples, 0.09%)</title><rect x="872.1" y="193" width="1.2" height="15.0" fill="rgb(250,30,49)" rx="2" ry="2" />
+<text text-anchor="" x="875.14" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport11TBufferBase4readEPhj (223 samples, 21.08%)</title><rect x="912.3" y="129" width="248.7" height="15.0" fill="rgb(212,23,10)" rx="2" ry="2" />
+<text text-anchor="" x="915.29" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport11TBuf..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZL18__gthread_active_pv (1 samples, 0.09%)</title><rect x="885.5" y="161" width="1.1" height="15.0" fill="rgb(249,131,32)" rx="2" ry="2" />
+<text text-anchor="" x="888.52" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport18TBufferedTransport5flushEv (730 samples, 69.00%)</title><rect x="55.7" y="241" width="814.2" height="15.0" fill="rgb(220,49,0)" rx="2" ry="2" />
+<text text-anchor="" x="58.73" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport18TBufferedTransport5flushEv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt12__shared_ptrIN6apache6thrift9transport10TTransportELN9__gnu_cxx12_Lock_policyE2EED1Ev (5 samples, 0.47%)</title><rect x="884.4" y="225" width="5.6" height="15.0" fill="rgb(246,57,11)" rx="2" ry="2" />
+<text text-anchor="" x="887.40" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol17writeMessageBeginERKSsNS1_12TMessageTypeEi (5 samples, 0.47%)</title><rect x="50.2" y="241" width="5.5" height="15.0" fill="rgb(224,229,54)" rx="2" ry="2" />
+<text text-anchor="" x="53.15" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>ntohs (1 samples, 0.09%)</title><rect x="876.6" y="145" width="1.1" height="15.0" fill="rgb(241,57,33)" rx="2" ry="2" />
+<text text-anchor="" x="879.60" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsD1Ev+0x3/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="1165.5" y="273" width="1.1" height="15.0" fill="rgb(240,104,18)" rx="2" ry="2" />
+<text text-anchor="" x="1168.46" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport11TBufferBase7readAllEPhj (224 samples, 21.17%)</title><rect x="911.2" y="161" width="249.8" height="15.0" fill="rgb(206,153,23)" rx="2" ry="2" />
+<text text-anchor="" x="914.17" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport11TBuf..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol14writeFieldStopEv (1 samples, 0.09%)</title><rect x="872.1" y="225" width="1.2" height="15.0" fill="rgb(252,38,54)" rx="2" ry="2" />
+<text text-anchor="" x="875.14" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_mutex_unlock (1 samples, 0.09%)</title><rect x="24.5" y="161" width="1.1" height="15.0" fill="rgb(207,131,6)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_int_free (1 samples, 0.09%)</title><rect x="42.3" y="209" width="1.2" height="15.0" fill="rgb(224,48,46)" rx="2" ry="2" />
+<text text-anchor="" x="45.34" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TVirtualProtocolINS1_16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEEENS1_17TProtocolDefaultsEE20writeFieldBegin_virtEPKcNS1_5TTypeEs (4 samples, 0.38%)</title><rect x="874.4" y="209" width="4.4" height="15.0" fill="rgb(235,47,5)" rx="2" ry="2" />
+<text text-anchor="" x="877.37" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__poll_nocancel (168 samples, 15.88%)</title><rect x="927.9" y="49" width="187.4" height="15.0" fill="rgb(246,86,5)" rx="2" ry="2" />
+<text text-anchor="" x="930.90" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >__poll_nocancel</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift11concurrency13PthreadThread5startEv (3 samples, 0.28%)</title><rect x="24.5" y="241" width="3.3" height="15.0" fill="rgb(223,134,21)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK6apache6thrift11concurrency7Monitor4waitEl (1 samples, 0.09%)</title><rect x="25.6" y="225" width="1.1" height="15.0" fill="rgb(219,225,4)" rx="2" ry="2" />
+<text text-anchor="" x="28.61" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE9writeByteEa (1 samples, 0.09%)</title><rect x="872.1" y="177" width="1.2" height="15.0" fill="rgb(238,112,16)" rx="2" ry="2" />
+<text text-anchor="" x="875.14" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport11TBufferBase5writeEPKhj (1 samples, 0.09%)</title><rect x="877.7" y="129" width="1.1" height="15.0" fill="rgb(219,22,16)" rx="2" ry="2" />
+<text text-anchor="" x="880.71" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_start_main (4 samples, 0.38%)</title><rect x="24.5" y="353" width="4.5" height="15.0" fill="rgb(217,161,49)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="363.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt12__shared_ptrIN6apache6thrift8protocol9TProtocolELN9__gnu_cxx12_Lock_policyE2EED1Ev (4 samples, 0.38%)</title><rect x="1185.5" y="273" width="4.5" height="15.0" fill="rgb(209,221,7)" rx="2" ry="2" />
+<text text-anchor="" x="1188.54" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TVirtualProtocolINS1_16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEEENS1_17TProtocolDefaultsEE20readStructBegin_virtERSs (1 samples, 0.09%)</title><rect x="40.1" y="209" width="1.1" height="15.0" fill="rgb(225,50,18)" rx="2" ry="2" />
+<text text-anchor="" x="43.11" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNKSs7compareERKSs+0x28/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="891.1" y="177" width="1.1" height="15.0" fill="rgb(217,208,32)" rx="2" ry="2" />
+<text text-anchor="" x="894.10" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN10helloworld38HelloworldService_getHelloworld_resultD2Ev (2 samples, 0.19%)</title><rect x="41.2" y="241" width="2.3" height="15.0" fill="rgb(231,18,26)" rx="2" ry="2" />
+<text text-anchor="" x="44.23" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>clone (1,041 samples, 98.39%)</title><rect x="29.0" y="369" width="1161.0" height="15.0" fill="rgb(214,206,41)" rx="2" ry="2" />
+<text text-anchor="" x="31.96" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >clone</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__lll_unlock_wake (1 samples, 0.09%)</title><rect x="24.5" y="129" width="1.1" height="15.0" fill="rgb(238,54,34)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE7readI32ERi (228 samples, 21.55%)</title><rect x="906.7" y="225" width="254.3" height="15.0" fill="rgb(249,216,46)" rx="2" ry="2" />
+<text text-anchor="" x="909.71" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift8protocol16TBina..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_L_unlock_722 (1 samples, 0.09%)</title><rect x="24.5" y="145" width="1.1" height="15.0" fill="rgb(224,168,13)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs15_M_replace_safeEmmPKcm+0x1e/0x70 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="900.0" y="193" width="1.1" height="15.0" fill="rgb(228,95,36)" rx="2" ry="2" />
+<text text-anchor="" x="903.02" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TVirtualProtocolINS1_16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEEENS1_17TProtocolDefaultsEE21readMessageBegin_virtERSsRNS1_12TMessageTypeERi (238 samples, 22.50%)</title><rect x="895.6" y="257" width="265.4" height="15.0" fill="rgb(221,58,32)" rx="2" ry="2" />
+<text text-anchor="" x="898.56" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift8protocol16TVirtua..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport7readAllEPhj (1 samples, 0.09%)</title><rect x="905.6" y="193" width="1.1" height="15.0" fill="rgb(229,160,51)" rx="2" ry="2" />
+<text text-anchor="" x="908.60" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt8_Rb_treeISsSt4pairIKSsMN10helloworld26HelloworldServiceProcessorEFviPN6apache6thrift8protocol9TProtocolES8_PvEESt10_Select1stISC_ESt4lessISsESaISC_EE14_M_lower_boundEPSt13_Rb_tree_nodeISC_ESL_RS1_ (3 samples, 0.28%)</title><rect x="891.1" y="225" width="3.3" height="15.0" fill="rgb(231,40,21)" rx="2" ry="2" />
+<text text-anchor="" x="894.10" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt14__shared_countILN9__gnu_cxx12_Lock_policyE2EED1Ev (4 samples, 0.38%)</title><rect x="885.5" y="209" width="4.5" height="15.0" fill="rgb(232,133,3)" rx="2" ry="2" />
+<text text-anchor="" x="888.52" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport7readAllEPhj (228 samples, 21.55%)</title><rect x="906.7" y="209" width="254.3" height="15.0" fill="rgb(210,110,15)" rx="2" ry="2" />
+<text text-anchor="" x="909.71" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport10TTra..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_int_free (1 samples, 0.09%)</title><rect x="1166.6" y="257" width="1.1" height="15.0" fill="rgb(253,84,52)" rx="2" ry="2" />
+<text text-anchor="" x="1169.58" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport17TVirtualTransportINS1_18TBufferedTransportENS1_11TBufferBaseEE12readAll_virtEPhj (228 samples, 21.55%)</title><rect x="906.7" y="193" width="254.3" height="15.0" fill="rgb(214,132,52)" rx="2" ry="2" />
+<text text-anchor="" x="909.71" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport17TVir..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNKSt12__shared_ptrIiLN9__gnu_cxx12_Lock_policyE2EE3getEv (2 samples, 0.19%)</title><rect x="924.6" y="49" width="2.2" height="15.0" fill="rgb(238,83,49)" rx="2" ry="2" />
+<text text-anchor="" x="927.56" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport11TBufferBase13setReadBufferEPhj (1 samples, 0.09%)</title><rect x="1155.4" y="97" width="1.1" height="15.0" fill="rgb(242,142,42)" rx="2" ry="2" />
+<text text-anchor="" x="1158.43" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE8writeI16Es (2 samples, 0.19%)</title><rect x="876.6" y="177" width="2.2" height="15.0" fill="rgb(219,171,29)" rx="2" ry="2" />
+<text text-anchor="" x="879.60" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt12__shared_ptrIN6apache6thrift9transport10TTransportELN9__gnu_cxx12_Lock_policyE2EEC1ERKS6_ (3 samples, 0.28%)</title><rect x="46.8" y="209" width="3.4" height="15.0" fill="rgb(226,34,30)" rx="2" ry="2" />
+<text text-anchor="" x="49.81" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt10shared_ptrIN6apache6thrift8protocol9TProtocolEED2Ev (6 samples, 0.57%)</title><rect x="1183.3" y="289" width="6.7" height="15.0" fill="rgb(244,215,32)" rx="2" ry="2" />
+<text text-anchor="" x="1186.31" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>recv (32 samples, 3.02%)</title><rect x="1119.7" y="49" width="35.7" height="15.0" fill="rgb(224,23,4)" rx="2" ry="2" />
+<text text-anchor="" x="1122.74" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >recv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK6apache6thrift11concurrency5Mutex6unlockEv (1 samples, 0.09%)</title><rect x="24.5" y="193" width="1.1" height="15.0" fill="rgb(221,23,21)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsD1Ev+0x3e/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (2 samples, 0.19%)</title><rect x="882.2" y="241" width="2.2" height="15.0" fill="rgb(213,23,6)" rx="2" ry="2" />
+<text text-anchor="" x="885.17" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs15_M_replace_safeEmmPKcm+0x1e/0x70 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="40.1" y="177" width="1.1" height="15.0" fill="rgb(227,84,8)" rx="2" ry="2" />
+<text text-anchor="" x="43.11" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport17TVirtualTransportINS1_18TBufferedTransportENS1_11TBufferBaseEE10write_virtEPKhj (1 samples, 0.09%)</title><rect x="877.7" y="145" width="1.1" height="15.0" fill="rgb(223,89,30)" rx="2" ry="2" />
+<text text-anchor="" x="880.71" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>main (4 samples, 0.38%)</title><rect x="24.5" y="337" width="4.5" height="15.0" fill="rgb(251,154,20)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt16_Sp_counted_baseILN9__gnu_cxx12_Lock_policyE2EE15_M_add_ref_copyEv (2 samples, 0.19%)</title><rect x="47.9" y="177" width="2.3" height="15.0" fill="rgb(241,21,47)" rx="2" ry="2" />
+<text text-anchor="" x="50.92" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNKSt12__shared_ptrIN6apache6thrift9transport10TTransportELN9__gnu_cxx12_Lock_policyE2EEptEv (1 samples, 0.09%)</title><rect x="868.8" y="225" width="1.1" height="15.0" fill="rgb(211,191,12)" rx="2" ry="2" />
+<text text-anchor="" x="871.79" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt17_Rb_tree_iteratorISt4pairIKSsMN10helloworld26HelloworldServiceProcessorEFviPN6apache6thrift8protocol9TProtocolES8_PvEEEC1Ev (1 samples, 0.09%)</title><rect x="890.0" y="257" width="1.1" height="15.0" fill="rgb(228,55,4)" rx="2" ry="2" />
+<text text-anchor="" x="892.98" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol12getTransportEv (5 samples, 0.47%)</title><rect x="44.6" y="241" width="5.6" height="15.0" fill="rgb(220,5,3)" rx="2" ry="2" />
+<text text-anchor="" x="47.57" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TVirtualProtocolINS1_16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEEENS1_17TProtocolDefaultsEE19writeFieldStop_virtEv (1 samples, 0.09%)</title><rect x="872.1" y="209" width="1.2" height="15.0" fill="rgb(245,137,36)" rx="2" ry="2" />
+<text text-anchor="" x="875.14" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport5writeEPKhj (725 samples, 68.53%)</title><rect x="59.1" y="225" width="808.6" height="15.0" fill="rgb(210,21,33)" rx="2" ry="2" />
+<text text-anchor="" x="62.07" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport10TTransport5writeEPKhj</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>all (1,058 samples, 100%)</title><rect x="10.0" y="385" width="1180.0" height="15.0" fill="rgb(233,35,46)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="395.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN10helloworld26HelloworldServiceProcessor12dispatchCallEPN6apache6thrift8protocol9TProtocolES5_RKSsiPv (769 samples, 72.68%)</title><rect x="36.8" y="273" width="857.6" height="15.0" fill="rgb(245,124,50)" rx="2" ry="2" />
+<text text-anchor="" x="39.77" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN10helloworld26HelloworldServiceProcessor12dispatchCallEPN6apache6thrift8protocol9TProtocolES5_RKSsiPv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>memset (3 samples, 0.28%)</title><rect x="1116.4" y="49" width="3.3" height="15.0" fill="rgb(221,164,37)" rx="2" ry="2" />
+<text text-anchor="" x="1119.39" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_enable_asynccancel (2 samples, 0.19%)</title><rect x="1113.0" y="33" width="2.3" height="15.0" fill="rgb(251,131,40)" rx="2" ry="2" />
+<text text-anchor="" x="1116.04" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs4_Rep9_S_createEmmRKSaIcE+0x59/0x80 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="879.9" y="209" width="1.2" height="15.0" fill="rgb(212,92,3)" rx="2" ry="2" />
+<text text-anchor="" x="882.94" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs4_Rep9_S_createEmmRKSaIcE+0x59/0x80 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="900.0" y="161" width="1.1" height="15.0" fill="rgb(210,0,49)" rx="2" ry="2" />
+<text text-anchor="" x="903.02" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift6server15TThreadedServer17onClientConnectedERKSt10shared_ptrINS1_16TConnectedClientEE (3 samples, 0.28%)</title><rect x="24.5" y="257" width="3.3" height="15.0" fill="rgb(247,218,15)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>pthread_cond_wait@@GLIBC_2.3.2 (1 samples, 0.09%)</title><rect x="25.6" y="161" width="1.1" height="15.0" fill="rgb(236,153,49)" rx="2" ry="2" />
+<text text-anchor="" x="28.61" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE7readI32ERi (2 samples, 0.19%)</title><rect x="904.5" y="209" width="2.2" height="15.0" fill="rgb(234,55,30)" rx="2" ry="2" />
+<text text-anchor="" x="907.48" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsD1Ev+0xe/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="1167.7" y="273" width="1.1" height="15.0" fill="rgb(235,192,28)" rx="2" ry="2" />
+<text text-anchor="" x="1170.69" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport7TSocket5writeEPKhj (724 samples, 68.43%)</title><rect x="60.2" y="193" width="807.5" height="15.0" fill="rgb(253,199,17)" rx="2" ry="2" />
+<text text-anchor="" x="63.19" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport7TSocket5writeEPKhj</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__memcpy_sse2_unaligned (1 samples, 0.09%)</title><rect x="902.2" y="177" width="1.2" height="15.0" fill="rgb(245,77,1)" rx="2" ry="2" />
+<text text-anchor="" x="905.25" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs18_S_construct_aux_2EmcRKSaIcE+0x27/0x90 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="879.9" y="225" width="1.2" height="15.0" fill="rgb(235,120,48)" rx="2" ry="2" />
+<text text-anchor="" x="882.94" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsD1Ev+0x3e/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (2 samples, 0.19%)</title><rect x="41.2" y="225" width="2.3" height="15.0" fill="rgb(209,214,48)" rx="2" ry="2" />
+<text text-anchor="" x="44.23" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsD1Ev+0x2c/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="881.1" y="241" width="1.1" height="15.0" fill="rgb(222,36,51)" rx="2" ry="2" />
+<text text-anchor="" x="884.06" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE15readStructBeginERSs (1 samples, 0.09%)</title><rect x="40.1" y="193" width="1.1" height="15.0" fill="rgb(232,78,52)" rx="2" ry="2" />
+<text text-anchor="" x="43.11" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt14__shared_countILN9__gnu_cxx12_Lock_policyE2EEC2ERKS2_ (2 samples, 0.19%)</title><rect x="47.9" y="193" width="2.3" height="15.0" fill="rgb(226,101,38)" rx="2" ry="2" />
+<text text-anchor="" x="50.92" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport5writeEPKhj (1 samples, 0.09%)</title><rect x="871.0" y="161" width="1.1" height="15.0" fill="rgb(253,7,23)" rx="2" ry="2" />
+<text text-anchor="" x="874.02" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol15readStructBeginERSs (2 samples, 0.19%)</title><rect x="39.0" y="225" width="2.2" height="15.0" fill="rgb(215,5,46)" rx="2" ry="2" />
+<text text-anchor="" x="42.00" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK10helloworld38HelloworldService_getHelloworld_result5writeEPN6apache6thrift8protocol9TProtocolE (8 samples, 0.76%)</title><rect x="869.9" y="241" width="8.9" height="15.0" fill="rgb(238,225,20)" rx="2" ry="2" />
+<text text-anchor="" x="872.91" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>0x7fa5be4755a0 [/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.25 (1 samples, 0.09%)</title><rect x="23.4" y="369" width="1.1" height="15.0" fill="rgb(233,94,6)" rx="2" ry="2" />
+<text text-anchor="" x="26.38" y="379.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>free (1 samples, 0.09%)</title><rect x="883.3" y="225" width="1.1" height="15.0" fill="rgb(219,104,17)" rx="2" ry="2" />
+<text text-anchor="" x="886.29" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport16TServerTransport6acceptEv (1 samples, 0.09%)</title><rect x="27.8" y="273" width="1.2" height="15.0" fill="rgb(238,60,43)" rx="2" ry="2" />
+<text text-anchor="" x="30.84" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport7TSocket13write_partialEPKhj (723 samples, 68.34%)</title><rect x="61.3" y="177" width="806.4" height="15.0" fill="rgb(214,217,15)" rx="2" ry="2" />
+<text text-anchor="" x="64.30" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport7TSocket13write_partialEPKhj</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport18TBufferedTransport8readSlowEPhj (221 samples, 20.89%)</title><rect x="914.5" y="113" width="246.5" height="15.0" fill="rgb(210,0,52)" rx="2" ry="2" />
+<text text-anchor="" x="917.52" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport18TBu..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZStltIcSt11char_traitsIcESaIcEEbRKSbIT_T0_T1_ES8_ (1 samples, 0.09%)</title><rect x="891.1" y="193" width="1.1" height="15.0" fill="rgb(247,50,48)" rx="2" ry="2" />
+<text text-anchor="" x="894.10" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport5writeEPKhj (1 samples, 0.09%)</title><rect x="54.6" y="177" width="1.1" height="15.0" fill="rgb(249,70,47)" rx="2" ry="2" />
+<text text-anchor="" x="57.61" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt10shared_ptrIN6apache6thrift8protocol9TProtocolEEC2ERKS4_ (6 samples, 0.57%)</title><rect x="1176.6" y="289" width="6.7" height="15.0" fill="rgb(236,59,7)" rx="2" ry="2" />
+<text text-anchor="" x="1179.62" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs4_Rep10_M_destroyERKSaIcE+0x0/0x50 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="882.2" y="225" width="1.1" height="15.0" fill="rgb(231,46,8)" rx="2" ry="2" />
+<text text-anchor="" x="885.17" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt16_Sp_counted_baseILN9__gnu_cxx12_Lock_policyE2EE15_M_add_ref_copyEv (2 samples, 0.19%)</title><rect x="1181.1" y="241" width="2.2" height="15.0" fill="rgb(214,160,12)" rx="2" ry="2" />
+<text text-anchor="" x="1184.08" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt16_Sp_counted_baseILN9__gnu_cxx12_Lock_policyE2EE10_M_releaseEv (4 samples, 0.38%)</title><rect x="885.5" y="193" width="4.5" height="15.0" fill="rgb(207,137,8)" rx="2" ry="2" />
+<text text-anchor="" x="888.52" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol16readMessageBeginERSsRNS1_12TMessageTypeERi (239 samples, 22.59%)</title><rect x="894.4" y="273" width="266.6" height="15.0" fill="rgb(252,64,31)" rx="2" ry="2" />
+<text text-anchor="" x="897.44" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift8protocol9TProtoco..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport4readEPhj (215 samples, 20.32%)</title><rect x="915.6" y="97" width="239.8" height="15.0" fill="rgb(235,92,12)" rx="2" ry="2" />
+<text text-anchor="" x="918.63" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport10TT..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__poll (1 samples, 0.09%)</title><rect x="926.8" y="49" width="1.1" height="15.0" fill="rgb(246,86,49)" rx="2" ry="2" />
+<text text-anchor="" x="929.79" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE14readStringBodyISsEEjRT_i (5 samples, 0.47%)</title><rect x="898.9" y="209" width="5.6" height="15.0" fill="rgb(228,161,52)" rx="2" ry="2" />
+<text text-anchor="" x="901.90" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs15_M_replace_safeEmmPKcm+0x3b/0x70 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="902.2" y="193" width="1.2" height="15.0" fill="rgb(240,26,2)" rx="2" ry="2" />
+<text text-anchor="" x="905.25" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport13TServerSocket10acceptImplEv (1 samples, 0.09%)</title><rect x="27.8" y="257" width="1.2" height="15.0" fill="rgb(253,5,6)" rx="2" ry="2" />
+<text text-anchor="" x="30.84" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift11concurrency5GuardD1Ev (1 samples, 0.09%)</title><rect x="24.5" y="209" width="1.1" height="15.0" fill="rgb(220,68,3)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol17TNetworkBigEndian8toWire16Et (1 samples, 0.09%)</title><rect x="876.6" y="161" width="1.1" height="15.0" fill="rgb(249,54,33)" rx="2" ry="2" />
+<text text-anchor="" x="879.60" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift18TDispatchProcessor7processESt10shared_ptrINS0_8protocol9TProtocolEES5_Pv (1,020 samples, 96.41%)</title><rect x="32.3" y="289" width="1137.6" height="15.0" fill="rgb(250,45,45)" rx="2" ry="2" />
+<text text-anchor="" x="35.31" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift18TDispatchProcessor7processESt10shared_ptrINS0_8protocol9TProtocolEES5_Pv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs6assignEPKcm+0x19/0x100 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="903.4" y="193" width="1.1" height="15.0" fill="rgb(212,42,52)" rx="2" ry="2" />
+<text text-anchor="" x="906.36" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK6apache6thrift11concurrency7Monitor4Impl19waitForTimeRelativeEl (1 samples, 0.09%)</title><rect x="25.6" y="193" width="1.1" height="15.0" fill="rgb(215,108,41)" rx="2" ry="2" />
+<text text-anchor="" x="28.61" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE10readStringISsEEjRT_ (7 samples, 0.66%)</title><rect x="898.9" y="225" width="7.8" height="15.0" fill="rgb(222,197,30)" rx="2" ry="2" />
+<text text-anchor="" x="901.90" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_Znwm+0x0/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="900.0" y="145" width="1.1" height="15.0" fill="rgb(215,160,44)" rx="2" ry="2" />
+<text text-anchor="" x="903.02" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__memcpy_sse2_unaligned (2 samples, 0.19%)</title><rect x="1158.8" y="97" width="2.2" height="15.0" fill="rgb(226,25,42)" rx="2" ry="2" />
+<text text-anchor="" x="1161.77" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK5boost12scoped_arrayIhE3getEv (2 samples, 0.19%)</title><rect x="1156.5" y="97" width="2.3" height="15.0" fill="rgb(209,95,51)" rx="2" ry="2" />
+<text text-anchor="" x="1159.54" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport5writeEPKhj (1 samples, 0.09%)</title><rect x="877.7" y="161" width="1.1" height="15.0" fill="rgb(243,195,34)" rx="2" ry="2" />
+<text text-anchor="" x="880.71" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift6server15TThreadedServer22TConnectedClientRunner3runEv (1,041 samples, 98.39%)</title><rect x="29.0" y="321" width="1161.0" height="15.0" fill="rgb(222,192,26)" rx="2" ry="2" />
+<text text-anchor="" x="31.96" y="331.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift6server15TThreadedServer22TConnectedClientRunner3runEv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport7readAllINS1_11TBufferBaseEEEjRT_Phj (223 samples, 21.08%)</title><rect x="912.3" y="145" width="248.7" height="15.0" fill="rgb(226,175,46)" rx="2" ry="2" />
+<text text-anchor="" x="915.29" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport7readA..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN9__gnu_cxxL21__atomic_add_dispatchEPii (2 samples, 0.19%)</title><rect x="47.9" y="161" width="2.3" height="15.0" fill="rgb(219,116,46)" rx="2" ry="2" />
+<text text-anchor="" x="50.92" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE17writeMessageBeginERKSsNS1_12TMessageTypeEi (2 samples, 0.19%)</title><rect x="53.5" y="209" width="2.2" height="15.0" fill="rgb(244,43,8)" rx="2" ry="2" />
+<text text-anchor="" x="56.50" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport10TTransport6borrowEPhPj (1 samples, 0.09%)</title><rect x="898.9" y="193" width="1.1" height="15.0" fill="rgb(220,96,17)" rx="2" ry="2" />
+<text text-anchor="" x="901.90" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__memcmp_sse4_1 (1 samples, 0.09%)</title><rect x="891.1" y="161" width="1.1" height="15.0" fill="rgb(218,49,30)" rx="2" ry="2" />
+<text text-anchor="" x="894.10" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN17HelloworldHandler13getHelloworldERSs (1 samples, 0.09%)</title><rect x="43.5" y="241" width="1.1" height="15.0" fill="rgb(233,0,16)" rx="2" ry="2" />
+<text text-anchor="" x="46.46" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSsC1EPKcRKSaIcE+0x30/0x40 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="879.9" y="241" width="1.2" height="15.0" fill="rgb(247,94,34)" rx="2" ry="2" />
+<text text-anchor="" x="882.94" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>send (719 samples, 67.96%)</title><rect x="65.8" y="161" width="801.9" height="15.0" fill="rgb(249,80,15)" rx="2" ry="2" />
+<text text-anchor="" x="68.77" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >send</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs9_M_mutateEmmm+0x62/0x210 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="900.0" y="177" width="1.1" height="15.0" fill="rgb(219,171,4)" rx="2" ry="2" />
+<text text-anchor="" x="903.02" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol11writeStringERKSs (1 samples, 0.09%)</title><rect x="871.0" y="225" width="1.1" height="15.0" fill="rgb(235,175,14)" rx="2" ry="2" />
+<text text-anchor="" x="874.02" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN9__gnu_cxxL12__atomic_addEPVii (2 samples, 0.19%)</title><rect x="47.9" y="145" width="2.3" height="15.0" fill="rgb(250,92,54)" rx="2" ry="2" />
+<text text-anchor="" x="50.92" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift6server16TServerFramework5serveEv (4 samples, 0.38%)</title><rect x="24.5" y="289" width="4.5" height="15.0" fill="rgb(213,144,22)" rx="2" ry="2" />
+<text text-anchor="" x="27.50" y="299.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNK6apache6thrift11concurrency7Monitor4Impl4waitEl (1 samples, 0.09%)</title><rect x="25.6" y="209" width="1.1" height="15.0" fill="rgb(236,43,32)" rx="2" ry="2" />
+<text text-anchor="" x="28.61" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol9TProtocol14writeStructEndEv (1 samples, 0.09%)</title><rect x="873.3" y="225" width="1.1" height="15.0" fill="rgb(218,193,33)" rx="2" ry="2" />
+<text text-anchor="" x="876.25" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSt17_Rb_tree_iteratorISt4pairIKSsMN10helloworld26HelloworldServiceProcessorEFviPN6apache6thrift8protocol9TProtocolES8_PvEEEC1EPSt18_Rb_tree_node_base (2 samples, 0.19%)</title><rect x="892.2" y="209" width="2.2" height="15.0" fill="rgb(244,19,54)" rx="2" ry="2" />
+<text text-anchor="" x="895.21" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift9transport18TBufferedTransport7readAllEPhj (226 samples, 21.36%)</title><rect x="908.9" y="177" width="252.1" height="15.0" fill="rgb(220,62,35)" rx="2" ry="2" />
+<text text-anchor="" x="911.94" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift9transport18TBuf..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNSs15_M_replace_safeEmmPKcm+0x2/0x70 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="901.1" y="193" width="1.1" height="15.0" fill="rgb(251,7,31)" rx="2" ry="2" />
+<text text-anchor="" x="904.13" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_Znwm+0x18/0x60 [/usr/lib/x86_64-linux-gnu/libstdc+ (1 samples, 0.09%)</title><rect x="879.9" y="193" width="1.2" height="15.0" fill="rgb(213,77,53)" rx="2" ry="2" />
+<text text-anchor="" x="882.94" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_disable_asynccancel (1 samples, 0.09%)</title><rect x="1111.9" y="33" width="1.1" height="15.0" fill="rgb(247,55,50)" rx="2" ry="2" />
+<text text-anchor="" x="1114.93" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>__libc_malloc (1 samples, 0.09%)</title><rect x="879.9" y="177" width="1.2" height="15.0" fill="rgb(223,55,48)" rx="2" ry="2" />
+<text text-anchor="" x="882.94" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift11concurrency13PthreadThread10threadMainEPv (1,041 samples, 98.39%)</title><rect x="29.0" y="337" width="1161.0" height="15.0" fill="rgb(208,217,33)" rx="2" ry="2" />
+<text text-anchor="" x="31.96" y="347.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >_ZN6apache6thrift11concurrency13PthreadThread10threadMainEPv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TVirtualProtocolINS1_16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEEENS1_17TProtocolDefaultsEE16writeString_virtERKSs (1 samples, 0.09%)</title><rect x="871.0" y="209" width="1.1" height="15.0" fill="rgb(252,17,23)" rx="2" ry="2" />
+<text text-anchor="" x="874.02" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZNKSt12__shared_ptrIN6apache6thrift9transport10TTransportELN9__gnu_cxx12_Lock_policyE2EEptEv (1 samples, 0.09%)</title><rect x="878.8" y="241" width="1.1" height="15.0" fill="rgb(235,87,52)" rx="2" ry="2" />
+<text text-anchor="" x="881.83" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN9__gnu_cxxL27__exchange_and_add_dispatchEPii (4 samples, 0.38%)</title><rect x="885.5" y="177" width="4.5" height="15.0" fill="rgb(242,186,18)" rx="2" ry="2" />
+<text text-anchor="" x="888.52" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_init (1 samples, 0.09%)</title><rect x="1115.3" y="49" width="1.1" height="15.0" fill="rgb(216,110,15)" rx="2" ry="2" />
+<text text-anchor="" x="1118.27" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>_ZN6apache6thrift8protocol16TBinaryProtocolTINS0_9transport10TTransportENS1_17TNetworkBigEndianEE11writeStringISsEEjRKT_ (1 samples, 0.09%)</title><rect x="871.0" y="193" width="1.1" height="15.0" fill="rgb(215,149,6)" rx="2" ry="2" />
+<text text-anchor="" x="874.02" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+</svg>
