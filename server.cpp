@@ -38,7 +38,11 @@ class HelloworldHandler : public HelloworldServiceIf {
 public:
   HelloworldHandler() = default;
 
-  ~HelloworldHandler() override = default;;
+  // ~HelloworldHandler() override = default;
+
+  ~HelloworldHandler() override {
+    cout<<"thread"
+  }
 
   void getHelloworld(string &return_str) override {
     return_str = "Helloworld";
