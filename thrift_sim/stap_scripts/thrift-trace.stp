@@ -1,0 +1,145 @@
+global call_count
+global netif_timestamp%[10000]
+global iprcv_timestamp%[10000]
+global timestamps%[10000]
+
+global BASE_TIME
+
+# probe kernel.function("__netif_receive_skb@net/core/dev.c").call {
+#   # if (tid() != 0) next;
+#   # if (pid2execname(pid()) != "server") next;
+#   # if ($skb->cloned == 0) next;
+#   call_count["netif"] ++
+#   netif_timestamp[$skb] = gettimeofday_ns()
+#   printf("1. tid = %d, count = %d ,skb = %d, netif_rcv\n", tid(), call_count["netif"], $skb)
+#   # printf("%s\n", $skb$)
+
+# }
+
+# probe kernel.function("ip_rcv@net/ipv4/ip_input.c").call {
+#   # if (tid() == 0) next;
+#   if (pid2execname(pid()) != "server") next;
+#   # if ($skb->cloned == 0) next;
+
+#   iprcv_timestamp[$skb] = gettimeofday_ns()
+#   call_count["ip_rcv"] ++
+#   printf("2. tid = %d, count = %d, skb = %d, ip_rcv\n", tid(), call_count["ip_rcv"], $skb)
+#   # printf("%s\n", $skb$)
+# }
+
+# probe kernel.function("tcp_rcv_established@net/ipv4/tcp_input.c").return {
+#     # if (pid2execname(pid()) != "server") next;
+#     # if ($skb->cloned == 0) next
+#     sk = $sk
+#     skb = $skb
+#     timestamps[sk, "netif"]   = netif_timestamp[skb]
+#     timestamps[sk, "ip_rcv"]  = iprcv_timestamp[skb]
+#     timestamps[sk, "tcp_rcv"] = gettimeofday_ns()
+
+
+#     # if (timestamps[sk, "netif"] == 0 || timestamps[sk, "ip_rcv"] == 0) next
+#     call_count["tcp_rcv"] ++
+
+#     printf("3. tid = %d, count = %d, skb = %d, sk = %d\n", tid(), call_count["tcp_rcv"], skb, sk)
+#     # printf("%s\n", sk->sk_socket$$)
+
+# }
+
+probe begin {
+  BASE_TIME = gettimeofday_ns() / 1000
+}
+
+probe syscall.poll.call {
+  if (pid2execname(pid()) != "server") next;
+  call_count["poll.call", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s poll.call at %d\n", tid(), call_count["poll.call", tid()], pid2execname(pid()), curr_time)
+}
+
+probe syscall.poll.return {
+  if (pid2execname(pid()) != "server") next;
+  call_count["poll.return", tid()] ++
+  # BASE_TIME = gettimeofday_ns() / 1000
+  # curr_time = 0
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s poll.return at %d\n", tid(), call_count["poll.return", tid()], pid2execname(pid()), curr_time)
+}
+
+probe process("/home/yg397/Github/helloworld-thrift/build/server").function("read@TBufferTransports.h") {
+  if (pid2execname(pid()) != "server") next;
+  call_count["read@TBufferTransports", tid()] ++
+  # BASE_TIME = gettimeofday_ns() / 1000
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s read@TBufferTransports at %d\n", tid(), call_count["read@TBufferTransports", tid()], pid2execname(pid()), curr_time)
+}
+
+probe process("/home/yg397/Github/helloworld-thrift/build/server").function("read@TSocket.cpp") {
+  if (pid2execname(pid()) != "server") next;
+  call_count["read@TSocket", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s read@TSocket at %d\n", tid(), call_count["read@TSocket", tid()], pid2execname(pid()), curr_time)
+}
+
+probe process("/home/yg397/Github/helloworld-thrift/build/server").function("read@TTransport.h") {
+  if (pid2execname(pid()) != "server") next;
+  call_count["read@TTransport", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s read@TTransport at %d\n", tid(), call_count["read@TTransport", tid()], pid2execname(pid()), curr_time)
+}
+
+probe kernel.function("tcp_push").call {
+  if (pid2execname(pid()) != "server") next;
+  call_count["tcp_push", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s tcp_push at %d\n", tid(), call_count["tcp_push", tid()], pid2execname(pid()), curr_time)
+}
+
+probe kernel.function("tcp_prequeue").call {
+  if (pid2execname(pid()) != "server") next;
+  call_count["tcp_prequeue", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s tcp_prequeue at %d\n", tid(), call_count["tcp_prequeue", tid()], pid2execname(pid()), curr_time)
+}
+
+probe kernel.function("sock_sendmsg").call {
+  if (pid2execname(pid()) != "server") next;
+  call_count["sock_sendmsg", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s sock_sendmsg at %d\n", tid(), call_count["sock_sendmsg", tid()], pid2execname(pid()), curr_time)
+}
+
+
+probe kernel.function("sock_recvmsg").call {
+  if (pid2execname(pid()) != "server") next;
+  call_count["sock_recvmsg", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s sock_recvmsg at %d\n", tid(), call_count["sock_recvmsg", tid()], pid2execname(pid()), curr_time)
+}
+
+probe kernel.function("net_rx_action").call {
+  if (pid2execname(pid()) != "server") next;
+  call_count["net_rx_action", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s net_rx_action at %d\n", tid(), call_count["net_rx_action", tid()], pid2execname(pid()), curr_time)
+}
+
+probe kernel.function("dev_hard_start_xmit").call {
+  if (pid2execname(pid()) != "server") next;
+  call_count["dev_hard_start_xmit", tid()] ++
+  curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+  printf("tid = %d, %d, %s dev_hard_start_xmit at %d\n", tid(), call_count["dev_hard_start_xmit", tid()], pid2execname(pid()), curr_time)
+}
+
+probe scheduler.ctxswitch {
+  if (pid2execname(prev_pid) == "server") {
+    call_count["ctxswitch_out", prev_tid] ++
+    curr_time = gettimeofday_ns() / 1000 - BASE_TIME
+    printf("tid = %d, %d, %s ctxswitch_out at %d\n", prev_tid, call_count["ctxswitch_out", prev_tid], pid2execname(prev_pid), curr_time)
+  }
+  if (pid2execname(next_pid) == "server") {
+    call_count["ctxswitch_in", next_tid] ++
+    BASE_TIME = gettimeofday_ns() / 1000
+    curr_time = 0
+    printf("tid = %d, %d, %s ctxswitch_in at %d\n", next_tid, call_count["ctxswitch_in", next_tid], pid2execname(next_pid), curr_time)
+  }
+}
