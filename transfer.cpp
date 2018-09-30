@@ -27,7 +27,8 @@
 
 #include "gen-cpp/HelloworldService.h"
 #include "gen-cpp/TransferService.h"
-#include "TThreadedClientPool.h"
+#include "ClientPool.h"
+#include "ThriftClient.h"
 
 using namespace std;
 
@@ -45,7 +46,7 @@ using namespace helloworld;
 class TransferServiceHandler: public TransferServiceIf {
 public:
   explicit TransferServiceHandler(
-      shared_ptr<TThreadedClientPool<HelloworldServiceClient>> &client_pool
+      shared_ptr<ClientPool<ThriftCLient<HelloworldServiceClient>>> &client_pool
   ) : client_pool_(client_pool) {
   };
 
@@ -59,7 +60,7 @@ public:
   }
 
 private:
-  shared_ptr<TThreadedClientPool<HelloworldServiceClient>> client_pool_;
+  shared_ptr<ClientPool<ThriftCLient<HelloworldServiceClient>>> client_pool_;
 };
 
 void startServer(TServer &server) {
@@ -93,8 +94,8 @@ int main(int argc, char *argv[]) {
   // Test if the child server is ready
   testConnect();
 
-  auto client_pool_ptr = make_shared<TThreadedClientPool<
-      HelloworldServiceClient>> (
+  auto client_pool_ptr = make_shared<ClientPool<ThriftCLient<
+      HelloworldServiceClient>>> (
           CLIENT_POOL_SIZE,
           "localhost",
           CHILD_PORT);
