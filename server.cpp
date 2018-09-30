@@ -38,11 +38,7 @@ class HelloworldHandler : public HelloworldServiceIf {
 public:
   HelloworldHandler() = default;
 
-  // ~HelloworldHandler() override = default;
-
-  ~HelloworldHandler() override {
-    cout<<"thread"
-  }
+   ~HelloworldHandler() override = default;
 
   void getHelloworld(string &return_str) override {
     return_str = "Helloworld";
@@ -120,10 +116,10 @@ int main(int argc, char *argv[]) {
   
   else if (serverType == threaded) {
     TThreadedServer server (
-      stdcxx::make_shared<HelloworldServiceProcessor>(stdcxx::make_shared<HelloworldHandler>()),
-      stdcxx::make_shared<TServerSocket>(9090),
-      stdcxx::make_shared<TBufferedTransportFactory>(),
-      stdcxx::make_shared<TBinaryProtocolFactory>()
+        stdcxx::make_shared<HelloworldServiceProcessor>(stdcxx::make_shared<HelloworldHandler>()),
+        stdcxx::make_shared<TServerSocket>(9090),
+        stdcxx::make_shared<TBufferedTransportFactory>(),
+        stdcxx::make_shared<TBinaryProtocolFactory>()
     );
     startServer(server);
   }

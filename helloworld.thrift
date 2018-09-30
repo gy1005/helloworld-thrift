@@ -2,5 +2,9 @@ namespace cpp helloworld
 namespace py helloworld
 
 service HelloworldService {
-    string getHelloworld()
+  string getHelloworld()
+}
+
+service TransferService {
+  string transfer()
 }

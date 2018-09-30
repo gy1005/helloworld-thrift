@@ -18,6 +18,7 @@
 
 
 #include "gen-cpp/HelloworldService.h"
+#include "gen-cpp/TransferService.h"
 
 
 using namespace std;
@@ -35,7 +36,8 @@ void worker
     int duration, 
     bool nonblocking, 
     list<int64_t> &reqs_latency, 
-    int &n_reqs_sent
+    int &n_reqs_sent,
+    bool if_transfer
 ) {
   stdcxx::shared_ptr<TTransport> socket(new TSocket(addr, port));
   stdcxx::shared_ptr<TTransport> transport;
@@ -46,39 +48,73 @@ void worker
     transport = stdcxx::shared_ptr<TTransport>(new TBufferedTransport(socket));
 
   stdcxx::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
-  HelloworldServiceClient client(protocol);
 
-  long req_inteval_us = 1000000 / qps;
-  int duration_us = duration * 1000000;
+  if (if_transfer) {
+    TransferServiceClient client(protocol);
+    long req_inteval_us = 1000000 / qps;
+    int duration_us = duration * 1000000;
+    auto thread_start_time = chrono::high_resolution_clock::now();
+    auto next_send_time = thread_start_time;
+    try {
+      string res;
+      transport->open();
+      while (chrono::high_resolution_clock::now() < thread_start_time + chrono::microseconds(duration_us)){
+        while (chrono::high_resolution_clock::now() < next_send_time) {
+          int64_t sleep_time_us = (next_send_time - chrono::high_resolution_clock::now()).count() / 1000;
+          sleep_time_us = max(sleep_time_us, (long)0);
+          if (sleep_time_us)
+            this_thread::sleep_for(chrono::microseconds(sleep_time_us));
+        }
+        auto start_time = chrono::high_resolution_clock::now();
+        client.transfer(res);
+        auto end_time = chrono::high_resolution_clock::now();
+        auto req_latency = (end_time - start_time).count() / 1000;
+        reqs_latency.push_back(req_latency);
+        n_reqs_sent++;
+        next_send_time = next_send_time + chrono::microseconds(req_inteval_us);
 
-  auto thread_start_time = chrono::high_resolution_clock::now();
-  auto next_send_time = thread_start_time;
-
-
-  try {
-    string res;
-    transport->open();
-    while (chrono::high_resolution_clock::now() < thread_start_time + chrono::microseconds(duration_us)){
-      while (chrono::high_resolution_clock::now() < next_send_time) {
-        int64_t sleep_time_us = (next_send_time - chrono::high_resolution_clock::now()).count() / 1000;
-        sleep_time_us = max(sleep_time_us, (long)0);
-        if (sleep_time_us)
-          this_thread::sleep_for(chrono::microseconds(sleep_time_us));
       }
-      auto start_time = chrono::high_resolution_clock::now();
-      client.getHelloworld(res);
-      auto end_time = chrono::high_resolution_clock::now();
-      auto req_latency = (end_time - start_time).count() / 1000;
-      reqs_latency.push_back(req_latency);
-      n_reqs_sent++;
-      next_send_time = next_send_time + chrono::microseconds(req_inteval_us);
-      
-    }
 
-    transport->close();
-  } catch (TException &tx) {
-    cout << "ERROR: " << tx.what() << endl;
+      transport->close();
+    } catch (TException &tx) {
+      cout << "ERROR: " << tx.what() << endl;
+    }
   }
+
+  else {
+    HelloworldServiceClient client(protocol);
+    long req_inteval_us = 1000000 / qps;
+    int duration_us = duration * 1000000;
+    auto thread_start_time = chrono::high_resolution_clock::now();
+    auto next_send_time = thread_start_time;
+    try {
+      string res;
+      transport->open();
+      while (chrono::high_resolution_clock::now() < thread_start_time + chrono::microseconds(duration_us)){
+        while (chrono::high_resolution_clock::now() < next_send_time) {
+          int64_t sleep_time_us = (next_send_time - chrono::high_resolution_clock::now()).count() / 1000;
+          sleep_time_us = max(sleep_time_us, (long)0);
+          if (sleep_time_us)
+            this_thread::sleep_for(chrono::microseconds(sleep_time_us));
+        }
+        auto start_time = chrono::high_resolution_clock::now();
+        client.getHelloworld(res);
+        auto end_time = chrono::high_resolution_clock::now();
+        auto req_latency = (end_time - start_time).count() / 1000;
+        reqs_latency.push_back(req_latency);
+        n_reqs_sent++;
+        next_send_time = next_send_time + chrono::microseconds(req_inteval_us);
+
+      }
+
+      transport->close();
+    } catch (TException &tx) {
+      cout << "ERROR: " << tx.what() << endl;
+    }
+  }
+
+
+
 
 }
 
@@ -97,6 +133,7 @@ double sum(vector<int> const& v) {
 int main(int argc, char *argv[]) {
 
   string addr = "localhost";
+  bool if_transfer = false;
   int port = 9090;
   int qps = 100000;
   int n_threads = 100;
@@ -106,7 +143,7 @@ int main(int argc, char *argv[]) {
   flags = 0;
   bool nonblocking = false;
 
-  while ((opt = getopt(argc, argv, "a:p:t:d:q:n")) != -1) {
+  while ((opt = getopt(argc, argv, "a:p:t:d:q:nT")) != -1) {
     switch (opt) {
       case 'a':
         addr = optarg;
@@ -126,6 +163,9 @@ int main(int argc, char *argv[]) {
       case 'n':
         nonblocking = true;
         break;
+      case 'T':
+        if_transfer = true;
+        break;
       default:  /* '?' */
         fprintf(stderr, "Usage: %s [-t number of threads] [-s] server type\n",
                 argv[0]);
@@ -133,6 +173,9 @@ int main(int argc, char *argv[]) {
 
     }
   }
+
+  port = if_transfer ? 9091 : 9090;
+
   std::shared_ptr<thread> t_ptr[n_threads];
   vector<int> n_reqs_sent;
   for (int i = 0; i< n_threads; i++) {
@@ -145,7 +188,17 @@ int main(int argc, char *argv[]) {
   auto *reqs_latency = new list<int64_t> [n_threads];
 
   for (auto &i : t_ptr) {
-    i = std::make_shared<thread>(worker, tid, addr, port, qps / n_threads, duration, nonblocking, ref(reqs_latency[tid]), ref(n_reqs_sent[tid]));
+    i = std::make_shared<thread>(
+        worker,
+        tid,
+        addr,
+        port,
+        qps / n_threads,
+        duration,
+        nonblocking,
+        ref(reqs_latency[tid]),
+        ref(n_reqs_sent[tid]),
+        if_transfer);
     tid++;
     this_thread::sleep_for(chrono::microseconds(interval));
   }

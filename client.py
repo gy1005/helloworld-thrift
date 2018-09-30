@@ -1,7 +1,7 @@
 import sys
 sys.path.append('gen-py')
 
-from helloworld import HelloworldService
+from helloworld import HelloworldService, TransferService
 
 from thrift import Thrift
 from thrift.transport import TSocket
@@ -12,24 +12,23 @@ import time
 
 def main():
   # Make socket
-  transport = TSocket.TSocket('localhost', 9090)
+  transport = TSocket.TSocket('localhost', 9091)
 
   # Buffering is critical. Raw sockets are very slow
-  transport = TTransport.TFramedTransport(transport)
+  transport = TTransport.TBufferedTransport(transport)
 
   # Wrap in a protocol
   protocol = TBinaryProtocol.TBinaryProtocol(transport)
 
   # Create a client to use the protocol encoder
-  client = HelloworldService.Client(protocol)
+  client = TransferService.Client(protocol)
 
   # Connect!
   transport.open()
   print("conn open")
-  res = client.getHelloworld()
+  res = client.transfer()
   print(res)
 
-  time.sleep(5)
   transport.close()
 
 if __name__ == '__main__':

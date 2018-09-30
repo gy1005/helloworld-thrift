@@ -11,34 +11,43 @@ HunterGate(
 
 project(helloworld)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 
 hunter_add_package(thrift)
-
 find_package(thrift CONFIG REQUIRED)
-
-
 
 add_executable(server
         server.cpp
         gen-cpp/HelloworldService.cpp
+
 )
 
 add_executable(client
         client.cpp
         gen-cpp/HelloworldService.cpp
+        gen-cpp/TransferService.cpp
 )
 
+add_executable(transfer
+        transfer.cpp
+        gen-cpp/HelloworldService.cpp
+        gen-cpp/TransferService.cpp
+
+)
 
 
 target_link_libraries(server PUBLIC
         thrift::thrift_static            # Main thrift library, thrift_static for static library
-#        thrift::thriftz           # thrift ZLIB support
         thrift::thriftnb_static        # thrift Libevent non-blocking support
 )
 
 target_link_libraries(client PUBLIC
         thrift::thrift_static            # Main thrift library, thrift_static for static library
-        #        thrift::thriftz           # thrift ZLIB support
         thrift::thriftnb_static        # thrift Libevent non-blocking support
-        )
+)
+
+target_link_libraries(transfer PUBLIC
+        thrift::thrift_static            # Main thrift library, thrift_static for static library
+        thrift::thriftnb_static        # thrift Libevent non-blocking support
+)
+
