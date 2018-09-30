@@ -16,6 +16,8 @@
 #include <queue>
 #include <string>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
 
 
 using namespace std;
@@ -24,9 +26,8 @@ using namespace apache::thrift;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
 
-
-// TODO: Max number of connections and wait for free connection.
-// TODO: Reconnect while failure.
+#define MAX_N_CLIENTS 256
+#define MAX_N_RETRY 10
 
 template <class TClient>
 class ClientTuple {
@@ -60,12 +61,18 @@ ClientTuple<TClient>::ClientTuple(
       new TBufferedTransport(socket_));
   protocol_ = stdcxx::shared_ptr<TProtocol>(new TBinaryProtocol(transport_));
   client_ = stdcxx::shared_ptr<TClient>(new TClient(protocol_));
-  try {
-    transport_->open();
-  } catch (TException &tx) {
-    // TODO: Reconnect if fails.
-    cout << "ERROR: " << tx.what() << endl;
+
+  for (int i = 0; i < MAX_N_RETRY; ++i) {
+    try {
+      transport_->open();
+      break;
+    } catch (TException &tx) {
+      cout << "ERROR: " << tx.what() << endl;
+      cout << "Trying Reconnect" << endl;
+      this_thread::sleep_for(chrono::milliseconds(100));
+    }
   }
+
 }
 
 template <class TClient>
@@ -84,10 +91,10 @@ ClientTuple<TClient>::~ClientTuple() {
     // TODO: Resolve closing error
     cout << "ERROR: " << tx.what() << endl;
   }
-  client_.reset();
-  protocol_.reset();
-  transport_.reset();
-  socket_.reset();
+  delete &client_;
+  delete &protocol_;
+  delete &transport_;
+  delete &socket_;
 }
 
 template<class TClient>
@@ -105,13 +112,13 @@ class TThreadedClientPool {
 public:
   TThreadedClientPool(int pool_size, const string &addr, int port);
   TThreadedClientPool(TThreadedClientPool<TClient> &other);
-
   ~TThreadedClientPool();
+
+  // Get a client from the connection pool.
   shared_ptr<ClientTuple<TClient>> getClient();
+
+  // Return a client to the free list.
   void returnClient(int client_id);
-
-
-
 
 private:
   int pool_size_{};
@@ -120,7 +127,9 @@ private:
   vector<shared_ptr<ClientTuple<TClient>>> clients_;
   queue<int> free_list_;
   mutex mtx_;
+  condition_variable cv_;
 
+  // Create a new client if there is current no client in the free list.
   shared_ptr<ClientTuple<TClient>> createClientAndUse_();
 
 };
@@ -129,7 +138,7 @@ template <class TClient>
 TThreadedClientPool<TClient>::TThreadedClientPool(
     int pool_size,
     const string &addr,
-    int port): mtx_(), pool_size_(pool_size), addr_(addr), port_(port) {
+    int port): mtx_(), pool_size_(pool_size), addr_(addr), port_(port), cv_() {
   for (int i = 0; i < pool_size_; ++i) {
     auto client_ptr = shared_ptr<ClientTuple<TClient>>(
         new ClientTuple<TClient>(addr, port, i));
@@ -151,7 +160,8 @@ TThreadedClientPool<TClient>::TThreadedClientPool(
     port_(other.port_),
     clients_(other.clients_),
     free_list_(other.free_list_),
-    mtx_() {}
+    mtx_(),
+    cv_() {}
 
 
 
@@ -160,8 +170,11 @@ TThreadedClientPool<TClient>::~TThreadedClientPool() {
   assert(free_list_.size() == pool_size_);
   assert(clients_.size() == pool_size_);
 
-  while (clients_.size() > 0)
+  while (clients_.size() > 0) {
+    auto client_ptr = clients_.back();
+    delete &client_ptr;
     clients_.pop_back();
+  }
 
 }
 
@@ -169,31 +182,34 @@ template <class TClient>
 shared_ptr<ClientTuple<TClient>> TThreadedClientPool<TClient>::
 getClient() {
   int client_id;
-  mtx_.lock();
-  mtx_.unlock();
-
   shared_ptr<ClientTuple<TClient>> return_ptr;
 
-  mtx_.lock();
-  if (free_list_.size() == 0) {
-    mtx_.unlock();
-    return createClientAndUse_();
-  }
-  else {
+  unique_lock<mutex> cv_lock(mtx_);
+  {
+    while (free_list_.size() == 0) {
+      if (pool_size_ < MAX_N_CLIENTS) {
+        cv_lock.unlock();
+        return createClientAndUse_();
+      } else {
+        cv_.wait(cv_lock, [this]{return free_list_.size() > 0;});
+      }
+    }
     client_id = free_list_.front();
     free_list_.pop();
     return_ptr = clients_[client_id];
-    mtx_.unlock();
-
+    cv_lock.unlock();
     return return_ptr;
+
   }
 }
 
 template <class TClient>
 void TThreadedClientPool<TClient>::returnClient(int client_id) {
-  mtx_.lock();
-  free_list_.push(client_id);
-  mtx_.unlock();
+  unique_lock<mutex> cv_lock(mtx_); {
+    free_list_.push(client_id);
+  }
+  cv_lock.unlock();
+  cv_.notify_one();
 }
 
 template <class TClient>
@@ -205,6 +221,7 @@ createClientAndUse_() {
       new ClientTuple<TClient>(addr_, port_, pool_size_));
   clients_.emplace_back(client_ptr);
   pool_size_++;
+
   mtx_.unlock();
   return client_ptr;
 }
