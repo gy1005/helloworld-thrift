@@ -93,14 +93,11 @@ int main(int argc, char *argv[]) {
   // Test if the child server is ready
   testConnect();
 
-  auto client_pool = new TThreadedClientPool<HelloworldServiceClient> (
-      CLIENT_POOL_SIZE,
-      "localhost",
-      CHILD_PORT
-  );
-
-  auto client_pool_ptr = shared_ptr<TThreadedClientPool<
-      HelloworldServiceClient>>(client_pool);
+  auto client_pool_ptr = make_shared<TThreadedClientPool<
+      HelloworldServiceClient>> (
+          CLIENT_POOL_SIZE,
+          "localhost",
+          CHILD_PORT);
 
   TThreadedServer server (
       stdcxx::make_shared<TransferServiceProcessor>(

@@ -91,10 +91,10 @@ ClientTuple<TClient>::~ClientTuple() {
     // TODO: Resolve closing error
     cout << "ERROR: " << tx.what() << endl;
   }
-  delete &client_;
-  delete &protocol_;
-  delete &transport_;
-  delete &socket_;
+  client_.reset();
+  protocol_.reset();
+  transport_.reset();
+  socket_.reset();
 }
 
 template<class TClient>
@@ -140,8 +140,7 @@ TThreadedClientPool<TClient>::TThreadedClientPool(
     const string &addr,
     int port): mtx_(), pool_size_(pool_size), addr_(addr), port_(port), cv_() {
   for (int i = 0; i < pool_size_; ++i) {
-    auto client_ptr = shared_ptr<ClientTuple<TClient>>(
-        new ClientTuple<TClient>(addr, port, i));
+    auto client_ptr = make_shared<ClientTuple<TClient>>(addr, port, i);
 
     // Ensure the thread safety when manipulating the queues.
     mtx_.lock();
@@ -172,7 +171,7 @@ TThreadedClientPool<TClient>::~TThreadedClientPool() {
 
   while (clients_.size() > 0) {
     auto client_ptr = clients_.back();
-    delete &client_ptr;
+    client_ptr.reset();
     clients_.pop_back();
   }
 
@@ -217,8 +216,7 @@ shared_ptr<ClientTuple<TClient>> TThreadedClientPool<TClient>::
 createClientAndUse_() {
   shared_ptr<ClientTuple<TClient>> client_ptr;
   mtx_.lock();
-  client_ptr = shared_ptr<ClientTuple<TClient>>(
-      new ClientTuple<TClient>(addr_, port_, pool_size_));
+  client_ptr = make_shared<ClientTuple<TClient>>(addr_, port_, pool_size_);
   clients_.emplace_back(client_ptr);
   pool_size_++;
 
