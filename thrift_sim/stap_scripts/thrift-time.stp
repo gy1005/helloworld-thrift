@@ -1,0 +1,40 @@
+global call_count
+global timestamps%[10000]
+global stats
+
+# probe syscall.poll.call {
+#   if (pid2execname(pid()) != "server") next;
+#   call_count["poll.call", tid()] ++
+#   curr_time = gettimeofday_ns() / 1000
+#   timestamps["poll.call", next_tid] = curr_time
+#   # printf("tid = %d, %d, %s poll.call at %d\n", tid(), call_count["poll.call", tid()], pid2execname(pid()), curr_time)
+# }
+
+# probe syscall.poll.return {
+#   if (pid2execname(pid()) != "server") next;
+#   call_count["poll.return", tid()] ++
+#   curr_time = gettimeofday_ns() / 1000
+#   timestamps["poll.return", next_tid] = curr_time
+#   # printf("tid = %d, %d, %s poll.return at %d\n", tid(), call_count["poll.return", tid()], pid2execname(pid()), curr_time)
+# }
+
+probe scheduler.ctxswitch {
+  if (pid2execname(prev_pid) == "server") {
+    # call_count["ctxswitch_out", prev_tid] ++
+    curr_time = gettimeofday_ns() / 1000
+    timestamps["ctxswitch_out", prev_tid] = curr_time
+    stats <<< timestamps["ctxswitch_out", prev_tid] -  timestamps["ctxswitch_in", prev_tid]
+    # printf("tid = %d, %d, %s ctxswitch_out at %d\n", prev_tid, call_count["ctxswitch_out", prev_tid], pid2execname(prev_pid), curr_time)
+  }
+  if (pid2execname(next_pid) == "server") {
+    # call_count["ctxswitch_in", next_tid] ++
+    curr_time = gettimeofday_ns() / 1000
+    timestamps["ctxswitch_in", next_tid] = curr_time
+    # printf("tid = %d, %d, %s ctxswitch_in at %d\n", next_tid, call_count["ctxswitch_in", next_tid], pid2execname(next_pid), curr_time)
+  }
+}
+
+probe end {
+  printf("\n%d reqs, avg time: %d us\n",@count(stats), @avg(stats))
+  print(@hist_linear(stats, 0 , 100, 1))
+}
